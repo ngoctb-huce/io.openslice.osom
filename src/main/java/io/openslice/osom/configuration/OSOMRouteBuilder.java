@@ -1,6 +1,6 @@
 /*-
  * ========================LICENSE_START=================================
- * io.openslice.osom
+ * org.etsi.osl.osom
  * %%
  * Copyright (C) 2019 openslice.io
  * %%
@@ -17,21 +17,24 @@
  * limitations under the License.
  * =========================LICENSE_END==================================
  */
-package io.openslice.osom.configuration;
+package org.etsi.osl.osom.configuration;
 
+import java.util.Date;
+import java.util.Map;
+import org.apache.camel.Exchange;
 import org.apache.camel.LoggingLevel;
+import org.apache.camel.Processor;
 import org.apache.camel.builder.RouteBuilder;
-import org.apache.camel.model.dataformat.JsonLibrary;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.etsi.osl.model.nfv.ExperimentMetadata;
+import org.etsi.osl.model.nfv.Product;
+import org.etsi.osl.model.nfv.ValidationJob;
+import org.etsi.osl.model.nfv.ValidationStatus;
+import org.etsi.osl.model.nfv.VxFMetadata;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Component;
-
-import io.openslice.osom.management.ServiceOrderManager;
-import io.openslice.osom.serviceactions.ServiceActionCheck;
-import io.openslice.tmf.am642.model.AlarmCreate;
-import io.openslice.tmf.so641.model.ServiceOrder;
 
 @Configuration
 //@RefreshScope
@@ -40,12 +43,67 @@ public class OSOMRouteBuilder extends RouteBuilder {
 
 	private static final transient Log logger = LogFactory.getLog(OSOMRouteBuilder.class.getName());
 
+	
+
+
+    @Value("${CRD_DEPLOY_CR_REQ}")
+    private String CRD_DEPLOY_CR_REQ = "";
+    
+
+    @Value("${CRD_PATCH_CR_REQ}")
+    private String CRD_PATCH_CR_REQ = "";
+    
 	public void configure() {
 		
 
-//		
-//		prepei edw na lavoume ena action object
-//		kai na to epekseragstei to ServiceActionCheck.class Prepei na gemisoume to antistoixo object
+
+
+
+      from("direct:retriesCRD_DEPLOY_CR_REQ")
+      .errorHandler(deadLetterChannel("direct:retriesDeadLetters")
+              .maximumRedeliveries( 10 ) //let's try 10 times to send it....
+              .redeliveryDelay( 30000 ).useOriginalMessage()
+              //.deadLetterHandleNewException( false )
+              //.logExhaustedMessageHistory(false)
+              .logExhausted(true)
+              .logHandled(true)
+              //.retriesExhaustedLogLevel(LoggingLevel.WARN)
+              .retryAttemptedLogLevel( LoggingLevel.WARN) )
+      .to(CRD_DEPLOY_CR_REQ);
+      
+      
+      from("direct:retriesCRD_PATCH_CR_REQ")
+      .errorHandler(deadLetterChannel("direct:retriesDeadLetters")
+              .maximumRedeliveries( 10 ) //let's try 10 times to send it....
+              .redeliveryDelay( 30000 ).useOriginalMessage()
+              //.deadLetterHandleNewException( false )
+              //.logExhaustedMessageHistory(false)
+              .logExhausted(true)
+              .logHandled(true)
+              //.retriesExhaustedLogLevel(LoggingLevel.WARN)
+              .retryAttemptedLogLevel( LoggingLevel.WARN) )
+      .to(CRD_PATCH_CR_REQ);
+      
+      
+      
+      /**
+       * dead Letter Queue Users if everything fails to connect
+       */
+      from("direct:retriesDeadLetters")
+      //.setBody()
+      //.body(String.class)
+      .process( ErroneousValidationProcessor )
+      .to("stream:out");
+      
+//    .errorHandler(deadLetterChannel("direct:dlq_bugzilla")
+//            .maximumRedeliveries( 4 ) //let's try for the next 120 mins to send it....
+//            .redeliveryDelay( 60000 ).useOriginalMessage()
+//            .deadLetterHandleNewException( false )
+//            //.logExhaustedMessageHistory(false)
+//            .logExhausted(true)
+//            .logHandled(true)
+//            //.retriesExhaustedLogLevel(LoggingLevel.WARN)
+//            .retryAttemptedLogLevel( LoggingLevel.WARN) )
 
 //		from("jms:queue:OSOM.NEW_SERVICEORDER_PROCESS")
 //			.log(LoggingLevel.INFO, log, "New OSOM.IN.SERVICEORDER message received!")
@@ -86,5 +144,37 @@ public class OSOMRouteBuilder extends RouteBuilder {
 //		.to("stream:out");;
 //		
 	}
+	
+	Processor ErroneousValidationProcessor = new Processor() {
+      
+      @Override
+      public void process(Exchange exchange) throws Exception {
+
+          Map<String, Object> headers = exchange.getIn().getHeaders(); 
+          Product aProd = exchange.getIn().getBody( Product.class ); 
+          
+                  
+          if (aProd instanceof VxFMetadata) {
+              ((VxFMetadata) aProd).setValidationStatus( ValidationStatus.COMPLETED );
+          } else if (aProd instanceof ExperimentMetadata) {
+              ((ExperimentMetadata) aProd).setValidationStatus( ValidationStatus.COMPLETED );
+          }
+          
+          
+          if ( aProd.getValidationJobs() != null ) {
+              ValidationJob j = new ValidationJob();
+              j.setDateCreated( new Date() );
+              j.setJobid("ERROR");
+              j.setValidationStatus(false);
+              j.setOutputLog( "Error from the OSOM Route builder Service" );
+              aProd.getValidationJobs().add(j);
+          }
+          
+          exchange. getOut().setBody( aProd  );
+          // copy attachements from IN to OUT to propagate them
+          //exchange.getOut().setAttachments(exchange.getIn().getAttachments());
+          
+      }
+  };
 
 }
